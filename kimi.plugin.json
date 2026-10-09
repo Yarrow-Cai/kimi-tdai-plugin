@@ -1,0 +1,31 @@
+{
+  "name": "tdai-memory",
+  "version": "0.2.0",
+  "description": "TencentDB Agent Memory (TDAI) for Kimi Code: automatic recall (L1 memory, L3 persona, L2 scenes), sanitized conversation capture into L0, and memory tools.",
+  "keywords": ["memory", "tdai", "tencentdb", "recall", "context"],
+  "license": "MIT",
+  "interface": {
+    "displayName": "TDAI Memory",
+    "shortDescription": "TDAI 长期记忆：自动 recall + 对话捕获 + 记忆工具"
+  },
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "sessionStart": {
+    "skill": "using-tdai-memory"
+  },
+  "mcpServers": {
+    "tdai": {
+      "command": "node",
+      "args": ["./core/mcp_server.mjs"]
+    }
+  },
+  "hooks": [
+    { "event": "SessionStart", "command": "node ./hooks/hook.mjs SessionStart", "timeout": 5 },
+    { "event": "UserPromptSubmit", "command": "node ./hooks/hook.mjs UserPromptSubmit", "timeout": 6 },
+    { "event": "Stop", "command": "node ./hooks/hook.mjs Stop", "timeout": 5 },
+    { "event": "Interrupt", "command": "node ./hooks/hook.mjs Interrupt", "timeout": 3 },
+    { "event": "StopFailure", "command": "node ./hooks/hook.mjs StopFailure", "timeout": 3 },
+    { "event": "PreCompact", "command": "node ./hooks/hook.mjs PreCompact", "timeout": 5 },
+    { "event": "SessionEnd", "command": "node ./hooks/hook.mjs SessionEnd", "timeout": 5 }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "endpoint": "http://127.0.0.1:8420",
+  "hubPort": 8424,
+  "apiKey": "",
+  "gatewayToken": "",
+  "serviceId": "default",
+  "teamId": "",
+  "userId": "",
+  "agentId": "",
+  "autoAgent": true,
+  "recallLimit": 6,
+  "recallMaxChars": 2000,
+  "timeoutMs": 4000,
+  "maxMessageChars": 4000,
+  "includePersona": true,
+  "includeSceneNav": true,
+  "includePersonaMaxChars": 800,
+  "includeSceneMaxLines": 12,
+  "profileCacheTtlMs": 600000,
+  "autoRecall": true,
+  "autoCapture": true,
+  "wikiEnabled": false
+}
