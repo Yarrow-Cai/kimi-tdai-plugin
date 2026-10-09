@@ -126,17 +126,20 @@ node bin/tdai.mjs wiki-ingest <wiki_id>
 echo '{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"上次那个问题怎么解决的","cwd":"E:\\proj\\demo"}' | node hooks/hook.mjs UserPromptSubmit
 ```
 
-召回注入块只在 `UserPromptSubmit` 打到 stdout，其余事件静默；一切失败 fail-open，日志在 `~/.kimi-code/tdai-plugin/logs/`。
+召回注入块只在 `UserPromptSubmit` 打到 stdout，其余事件静默；一切失败 fail-open，日志在 `~/.kimi-code/tdai-plugin/logs/`（`hook-events.log` 是每次 hook 触发的痕迹，用于排查事件是否真的被触发）。
 
 ## 写入 L0 的处理链
 
 剥离 `<tdai_memory>` 等注入标签块（防 recall→capture 回流）→ 去掉 `/` 开头的命令与框架噪声 → 合并多余空行 → 按 `maxMessageChars` 截断 → 补 ISO 时间戳（后端拒收数字时间戳）→ 按 100 条/请求分片（技能缓冲 500 条/请求）→ 清洗后没有用户消息则整轮丢弃。被中断或失败的回合不写。
 
+**UserPromptSubmit 不触发时的兜底**：`Stop` / `PreCompact` / `SessionEnd` 会从会话记录（`agents/main/wire.jsonl` 里的 `turn.prompt`）取本轮用户原文，按 `promptId` 去重后一并上传。因此即使 pre-prompt 事件缺失，每轮对话仍会进 L0。
+
 ## 已知限制
 
+- **桌面端的 `UserPromptSubmit` 事件当前不触发**（实测 Kimi Code Desktop 1.0.4：连续多条消息都没有 hook 痕迹，而 SessionStart/Stop 正常）。影响：**每轮开始前的自动召回注入暂不生效**（改为依赖模型主动调 `tdai_search`）；对话**上传**已由上面的兜底路径解决。排查手段：看 `~/.kimi-code/tdai-plugin/logs/hook-events.log`，每行记录事件名、payload 键名、prompt 长度。
 - **只捕获用户输入 + 最终回复**，工具调用不进 L0；要加就补 `PostToolUse` hook（`/v3/conversation/add` 只收 user/assistant，工具事件要走 skill 通道）。
 - **代码块不剥离**（与参考项目相反，有意为之）：代码 agent 的关键结论常在代码块里，靠 `maxMessageChars` 截断兜底。
 - `tdai_remember` 写的是 **L0**，TDAI 管线异步抽取成 L1/L2/L3，刚写入的内容不会立刻被检索到。
 - **Wiki 工具默认关闭**：写页面/删库是对团队共享知识库的写操作，开启前请确认服务端权限与使用规范。
 - MCP 进程没有会话信息，项目 agent 靠 `process.cwd()` 或最近一次 hook 记录的目录推断；多项目并发时若 cwd 不可用可能绑错，这种情况建议配固定 `agentId`。
-- 插件运行的是 `$KIMI_CODE_HOME/plugins/managed/tdai-memory/` 下的**托管副本**：改桌面这份源码后需要重新 `/plugins install`。
+- 插件运行的是 `$KIMI_CODE_HOME/plugins/managed/tdai-memory/` 下的**托管副本**：改本地源码后要重新 `/plugins install`（或直接从 GitHub 重装）。
