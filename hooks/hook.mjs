@@ -22,10 +22,11 @@ function traceHook(payload) {
     const dir = path.join(dataDir(), "logs");
     fs.mkdirSync(dir, { recursive: true });
     const keys = Object.keys(payload || {}).join(",");
-    const prompt = typeof payload?.prompt === "string" ? payload.prompt : "";
+    const prompt = textValue(payload?.prompt);
+    const promptKind = Array.isArray(payload?.prompt) ? "array" : typeof payload?.prompt;
     fs.appendFileSync(
       path.join(dir, "hook-events.log"),
-      `${new Date().toISOString()} event=${eventName} argv=${process.argv.slice(2).join("|")} keys=[${keys}] session_id=${payload?.session_id ?? ""} cwd=${payload?.cwd ?? ""} prompt_len=${prompt.length} proc_cwd=${process.cwd()}\n`,
+      `${new Date().toISOString()} event=${eventName} argv=${process.argv.slice(2).join("|")} keys=[${keys}] session_id=${payload?.session_id ?? ""} cwd=${payload?.cwd ?? ""} prompt_kind=${promptKind} prompt_len=${prompt.length} proc_cwd=${process.cwd()}\n`,
     );
   } catch {
     // 诊断失败不影响主流程
@@ -56,10 +57,32 @@ async function readPayload() {
   });
 }
 
+/** 取出 payload 里第一个可用的文本字段。
+ *  注意：桌面端送来的 prompt 不是字符串，而是 [{type:"text",text:"…"}] 结构
+ *  （见 kimi.exe 的 matcherValueText），只认字符串会直接漏掉整条消息。 */
 function pickString(payload, keys) {
   for (const key of keys) {
-    const value = payload[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    const text = textValue(payload[key]);
+    if (text) return text;
+  }
+  return "";
+}
+
+/** 把 payload 字段归一化成文本：字符串 / [{type:"text",text}] / {text|display_text|content}。 */
+function textValue(value) {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) {
+    return value
+      .filter((part) => part && part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n")
+      .trim();
+  }
+  if (value && typeof value === "object") {
+    for (const key of ["text", "display_text", "content"]) {
+      const nested = value[key];
+      if (typeof nested === "string" && nested.trim()) return nested.trim();
+    }
   }
   return "";
 }

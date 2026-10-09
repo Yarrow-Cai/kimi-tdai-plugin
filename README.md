@@ -136,7 +136,7 @@ echo '{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"上次�
 
 ## 已知限制
 
-- **桌面端的 `UserPromptSubmit` 事件当前不触发**（实测 Kimi Code Desktop 1.0.4：连续多条消息都没有 hook 痕迹，而 SessionStart/Stop 正常）。影响：**每轮开始前的自动召回注入暂不生效**（改为依赖模型主动调 `tdai_search`）；对话**上传**已由上面的兜底路径解决。排查手段：看 `~/.kimi-code/tdai-plugin/logs/hook-events.log`，每行记录事件名、payload 键名、prompt 长度。
+- **桌面端 `UserPromptSubmit` 的 `prompt` 字段是结构化数组**（`[{type:"text",text:"…"}]`，与 `kimi.exe` 里 `matcherValueText` 的处理一致），不是文档示例里的字符串。v0.3.1 起 `pickString` 会归一化「字符串 / 数组 / 对象」三种形状；此前只认字符串，于是每轮召回与捕获都被静默跳过，表现为"对话没上传、也没有 `<tdai_memory>` 注入块"。排查手段：`~/.kimi-code/tdai-plugin/logs/hook-events.log`，每行含事件名、payload 键名、prompt 长度（结构化 prompt 在该日志里可能显示 0，属诊断细节）。
 - **只捕获用户输入 + 最终回复**，工具调用不进 L0；要加就补 `PostToolUse` hook（`/v3/conversation/add` 只收 user/assistant，工具事件要走 skill 通道）。
 - **代码块不剥离**（与参考项目相反，有意为之）：代码 agent 的关键结论常在代码块里，靠 `maxMessageChars` 截断兜底。
 - `tdai_remember` 写的是 **L0**，TDAI 管线异步抽取成 L1/L2/L3，刚写入的内容不会立刻被检索到。
