@@ -19,5 +19,7 @@
   "profileCacheTtlMs": 600000,
   "autoRecall": true,
   "autoCapture": true,
+  "recallOncePerSession": true,
+  "staticRecall": false,
   "wikiEnabled": false
 }

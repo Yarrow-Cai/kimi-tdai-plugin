@@ -6,8 +6,10 @@
 
 ```
 会话开始 ──▶ SessionStart      初始化状态 + 绑定项目 agent
-用户发言 ──▶ UserPromptSubmit  L1 原子记忆 + L0 历史对话 + L3 画像 + L2 场景索引
-                               → 以 <tdai_memory> 块注入上下文（画像/场景走 10 分钟缓存）
+首条发言 ──▶ UserPromptSubmit  L1 原子记忆 + L0 历史对话 + L3 画像 + L2 场景索引
+                               → 以 <tdai_memory> 块注入上下文，整个会话只注入这一次
+                               （画像/场景另有 10 分钟落盘缓存）
+后续发言 ──▶ UserPromptSubmit  只把用户输入攒进 pending，不再注入
 模型收尾 ──▶ Stop              本轮用户消息 + 最终回复 → /v3/conversation/add（L0）
                                同时喂 /v3/skill/conversation/add（触发技能抽取）
 中断/失败 ─▶ Interrupt/StopFailure  丢弃本轮，不写 L0
@@ -74,8 +76,27 @@
 | `includePersonaMaxChars` / `includeSceneMaxLines` | 800 / 12 | 画像与场景索引的注入上限 |
 | `profileCacheTtlMs` | 600000 | 画像/场景缓存 TTL（新会话开始时重置） |
 | `autoRecall` / `autoCapture` | true | 分别开关召回、捕获 |
+| `recallOncePerSession` | true | 每会话只在第一条用户消息注入一次召回块；`false` 恢复"每轮都注入"（旧行为） |
+| `staticRecall` | false | 召回块只含 L3 画像 + L2 场景索引，跳过 L1/L0 检索（这两项与当轮提问无关） |
 
-环境变量覆盖：`TDAI_MEMORY_ENDPOINT`、`TDAI_MEMORY_API_KEY`、`TDAI_MEMORY_GATEWAY_TOKEN`、`TDAI_MEMORY_INSTANCE_ID`、`TDAI_MEMORY_TEAM_ID`、`TDAI_MEMORY_USER_ID`、`TDAI_MEMORY_AGENT_ID`、`TDAI_MEMORY_HUB_PORT`；另有 `TDAI_MEMORY_AUTO_AGENT=0`、`TDAI_MEMORY_WIKI=1`、`TDAI_MEMORY_DISABLED=1`、`TDAI_MEMORY_DEBUG=1`、`TDAI_MEMORY_DATA_DIR`。
+环境变量覆盖：`TDAI_MEMORY_ENDPOINT`、`TDAI_MEMORY_API_KEY`、`TDAI_MEMORY_GATEWAY_TOKEN`、`TDAI_MEMORY_INSTANCE_ID`、`TDAI_MEMORY_TEAM_ID`、`TDAI_MEMORY_USER_ID`、`TDAI_MEMORY_AGENT_ID`、`TDAI_MEMORY_HUB_PORT`；另有 `TDAI_MEMORY_AUTO_AGENT=0`、`TDAI_MEMORY_WIKI=1`、`TDAI_MEMORY_RECALL_ONCE=0`、`TDAI_MEMORY_RECALL_STATIC=1`、`TDAI_MEMORY_DISABLED=1`、`TDAI_MEMORY_DEBUG=1`、`TDAI_MEMORY_DATA_DIR`。
+
+## 召回时机
+
+召回块会一直留在对话历史里，逐轮累积会吃掉可观的上下文，所以默认**整个会话只注入一次**：
+
+| 模式 | 配置 | 行为 |
+| --- | --- | --- |
+| **A（默认）** | `recallOncePerSession: true`、`staticRecall: false` | 第一条用户消息时注入完整块（L1/L0 检索 + 画像 + 场景），之后不再注入 |
+| **B** | `recallOncePerSession: true`、`staticRecall: true` | 第一条用户消息只注入 L3 画像 + L2 场景索引；L1/L0 交给模型按需 `tdai_search` |
+| 旧行为 | `recallOncePerSession: false` | 每轮都注入（`staticRecall: true` 则为每轮只注入画像+场景） |
+
+两条实现约束：
+
+- **`SessionStart` 注入不了**。Kimi Code 只有 `UserPromptSubmit`（以及 `Stop` 用于续跑的消息）会把 hook 的 stdout 追加进上下文，其余事件走 fire-and-forget，返回值直接丢弃。所以"会话开始注入"落在会话的第一条用户消息上，效果等价。
+- 只有真的注入了才置位 `recallDone`。首轮服务不可达导致召回失败时，下一轮会重试；`SessionStart`（`startup`）会清零状态，新会话重新注入一次。
+
+关掉召回后，模型得自己判断该不该查记忆——`skills/using-tdai-memory/SKILL.md` 已按此措辞调整。
 
 ## 项目级 agent 自动绑定
 
@@ -124,6 +145,7 @@ node bin/tdai.mjs wiki-ingest <wiki_id>
 
 # 模拟 hook（不依赖 Kimi Code）
 echo '{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"上次那个问题怎么解决的","cwd":"E:\\proj\\demo"}' | node hooks/hook.mjs UserPromptSubmit
+# 同一 session_id 再跑一次：第一条应打出 <tdai_memory> 块，第二条静默（recallOncePerSession）
 ```
 
 召回注入块只在 `UserPromptSubmit` 打到 stdout，其余事件静默；一切失败 fail-open，日志在 `~/.kimi-code/tdai-plugin/logs/`（`hook-events.log` 是每次 hook 触发的痕迹，用于排查事件是否真的被触发）。
@@ -137,6 +159,7 @@ echo '{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"上次�
 ## 已知限制
 
 - **桌面端 `UserPromptSubmit` 的 `prompt` 字段是结构化数组**（`[{type:"text",text:"…"}]`，与 `kimi.exe` 里 `matcherValueText` 的处理一致），不是文档示例里的字符串。v0.3.1 起 `pickString` 会归一化「字符串 / 数组 / 对象」三种形状；此前只认字符串，于是每轮召回与捕获都被静默跳过，表现为"对话没上传、也没有 `<tdai_memory>` 注入块"。排查手段：`~/.kimi-code/tdai-plugin/logs/hook-events.log`，每行含事件名、payload 键名、prompt 长度（结构化 prompt 在该日志里可能显示 0，属诊断细节）。
+- **默认只在会话第一条消息注入一次召回**（`recallOncePerSession`）：之后几轮没有自动召回，模型要么自己调 `tdai_search`，要么就看不到往日上下文。想让每轮都有提示就把该开关设为 `false`，但注入块会留在历史里逐轮累积。
 - **只捕获用户输入 + 最终回复**，工具调用不进 L0；要加就补 `PostToolUse` hook（`/v3/conversation/add` 只收 user/assistant，工具事件要走 skill 通道）。
 - **代码块不剥离**（与参考项目相反，有意为之）：代码 agent 的关键结论常在代码块里，靠 `maxMessageChars` 截断兜底。
 - `tdai_remember` 写的是 **L0**，TDAI 管线异步抽取成 L1/L2/L3，刚写入的内容不会立刻被检索到。

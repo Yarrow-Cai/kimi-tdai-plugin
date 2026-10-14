@@ -87,11 +87,12 @@ function textValue(value) {
   return "";
 }
 
-/** 本轮召回：L1/L0 检索 + L3 画像 / L2 场景索引（画像与场景落盘缓存，TTL 内不重复请求）。 */
-async function recall(cfg, sessionId, query) {
+/** 本轮召回：L1/L0 检索 + L3 画像 / L2 场景索引（画像与场景落盘缓存，TTL 内不重复请求）。
+ *  skipSearch=true 时跳过 L1/L0 检索，只注入画像与场景索引（这两项与当轮提问无关）。 */
+async function recall(cfg, sessionId, query, { skipSearch = false } = {}) {
   const wantProfile = cfg.includePersona || cfg.includeSceneNav;
   const [memories, profile] = await Promise.allSettled([
-    searchMemory(cfg, query),
+    skipSearch ? Promise.resolve("") : searchMemory(cfg, query),
     (async () => {
       if (!wantProfile) return { persona: null, scenes: null };
       const cached = readProfileCache(sessionId, cfg.profileCacheTtlMs);
@@ -198,15 +199,22 @@ async function main() {
   if (eventName === "UserPromptSubmit") {
     const prompt = pickString(payload, ["prompt", "user_prompt", "userPrompt", "text"]);
     if (!prompt) return;
+    const state = readState(sessionId);
     if (cfg.autoCapture) {
-      const state = readState(sessionId);
       const pending = Array.isArray(state.pending) ? state.pending : [];
       pending.push({ role: "user", content: prompt, timestamp: new Date().toISOString() });
-      writeState(sessionId, { ...state, pending: pending.slice(-MAX_PENDING), turnFailed: false });
+      state.pending = pending.slice(-MAX_PENDING);
+      state.turnFailed = false;
+      writeState(sessionId, state);
     }
-    if (cfg.autoRecall) {
-      const block = await recall(cfg, sessionId, prompt);
-      if (block) process.stdout.write(`${block}\n`);
+    // recallOncePerSession：整个会话只在第一条用户消息注入一次，避免每轮重复占用上下文；
+    // 只有真的注入了才置位，首轮召回失败（服务不可达等）下一轮会重试。
+    if (cfg.autoRecall && !(cfg.recallOncePerSession && state.recallDone)) {
+      const block = await recall(cfg, sessionId, prompt, { skipSearch: cfg.staticRecall });
+      if (block) {
+        process.stdout.write(`${block}\n`);
+        if (cfg.recallOncePerSession) writeState(sessionId, { ...state, recallDone: true });
+      }
     }
     return;
   }
