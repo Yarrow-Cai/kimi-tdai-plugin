@@ -5,7 +5,8 @@
 参考实现：[vaynebobby-crypto/pi-tdai-team-memory](https://github.com/vaynebobby-crypto/pi-tdai-team-memory)（pi coding agent 的同类扩展）。本插件沿用了它的这些做法：写库前清洗注入块、ISO 时间戳、按服务端上限分片、失败回合跳过、L2/L3 召回与缓存、Gateway 双凭证鉴权、按项目目录派生并绑定 agent、团队技能库与 Wiki 知识库接口。
 
 ```
-会话开始 ──▶ SessionStart      初始化状态 + 绑定项目 agent
+插件加载 ──▶ systemPromptPath   SYSTEM.md 进系统提示词（每轮都在，静态，不占历史）
+会话开始 ──▶ SessionStart      初始化状态 + 绑定项目 agent + 加载 using-tdai-memory 技能
 首条发言 ──▶ UserPromptSubmit  L1 原子记忆 + L0 历史对话 + L3 画像 + L2 场景索引
                                → 以 <tdai_memory> 块注入上下文，整个会话只注入这一次
                                （画像/场景另有 10 分钟落盘缓存）
@@ -21,7 +22,8 @@
 
 | 路径 | 作用 |
 | --- | --- |
-| `kimi.plugin.json` | 插件清单（skills / commands / mcpServers / 7 个 hooks） |
+| `kimi.plugin.json` | 插件清单（skills / commands / systemPromptPath / mcpServers / 7 个 hooks） |
+| `SYSTEM.md` | 常驻约定，经 `systemPromptPath` 进系统提示词（每轮请求都在，不累积） |
 | `hooks/hook.mjs` | 所有 hook 的统一入口，按 argv[2] 分派事件 |
 | `core/mcp_server.mjs` | 零依赖 MCP stdio server（基础 8 工具 + 可选 8 个 Wiki 工具） |
 | `lib/tdai.mjs` | MemoryCore HTTP 客户端：数据层 / meta 层 / Wiki 层三套鉴权，清洗·截断·分片，hub 端口推导 |
@@ -29,7 +31,7 @@
 | `lib/sanitize.mjs` | 写 L0 前的文本清洗（剥离注入块、过滤命令与噪声） |
 | `lib/cache.mjs` | L3 画像 / L2 场景索引的落盘缓存（TTL 内不再重复请求） |
 | `lib/session.mjs` | 定位会话目录、解析 `agents/main/wire.jsonl` 取最后一条完整回复 |
-| `skills/using-tdai-memory/` | 会话启动时自动加载，教模型用这些工具、别重复保存 |
+| `skills/using-tdai-memory/` | 会话启动时加载一次：工具表 + 配置手册 + 排查方法 |
 | `commands/` | `/tdai-memory:recall`、`/tdai-memory:remember` |
 | `bin/tdai.mjs` | 手动调试 CLI（不入 hook 链路） |
 
@@ -97,6 +99,22 @@
 - 只有真的注入了才置位 `recallDone`。首轮服务不可达导致召回失败时，下一轮会重试；`SessionStart`（`startup`）会清零状态，新会话重新注入一次。
 
 关掉召回后，模型得自己判断该不该查记忆——`skills/using-tdai-memory/SKILL.md` 已按此措辞调整。
+
+## 系统提示词 / 技能 / 召回块 三者的分工
+
+| 载体 | 注入时机 | 是否累积 | 承载什么 |
+| --- | --- | --- | --- |
+| `systemPromptPath: ./SYSTEM.md` | 每个请求都随系统提示词发送 | **不累积**（体积恒定） | 常驻约定：注入时机、克制原则、别存密钥、agent 作用域 |
+| `sessionStart.skill` → `SKILL.md` | 会话启动时注入一次 | 不累积（刷新时替换旧的） | 工具表、配置手册、排查方法 |
+| `UserPromptSubmit` 的 `<tdai_memory>` 块 | 本会话第一条用户消息 | 一次，之后留在历史里 | 动态召回结果（L1/L0/画像/场景） |
+
+三条边界，决定了哪些内容放得进系统提示词：
+
+- **系统提示词里的内容必须是静态的**。`systemPrompt` / `systemPromptPath` 由宿主在**安装或 `/plugins reload` 时读取一次**，之后不再重读——hook 在会话启动时改写 `SYSTEM.md` 没用，当前会话不会重读。所以"动态召回结果"进不去系统提示词，只能走首条消息的注入块。
+- 上限：单个字段（内联文本或文件各算一份）32 KB，所有启用插件在一次 prompt 构建中合计 64 KB，超出的忽略并写进 `/plugins info` 的 diagnostics。
+- **"每轮都发"≠"重复付费"。** 系统提示词每个请求都随载荷发送，但它在最前面且永不变化，是理想的缓存前缀；实测本会话 100 次请求里 `systemPromptHash` 恒定、缓存读 12.2M token 对全价 input 26 万——恒定体积、恒定成本。真正要避免的是"每轮追加新内容"，那会让历史持续变长，每一轮都为它付出体积代价。
+
+改 `SYSTEM.md` 之后要 `/plugins reload` 或开新会话才生效；改 `config.json` 下一条消息就生效。
 
 ## 项目级 agent 自动绑定
 

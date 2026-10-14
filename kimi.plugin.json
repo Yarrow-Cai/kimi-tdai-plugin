@@ -1,6 +1,6 @@
 {
   "name": "tdai-memory",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "TencentDB Agent Memory (TDAI) for Kimi Code: automatic recall (L1 memory, L3 persona, L2 scenes), sanitized conversation capture into L0, and memory tools.",
   "keywords": ["memory", "tdai", "tencentdb", "recall", "context"],
   "license": "MIT",
@@ -10,6 +10,7 @@
   },
   "skills": "./skills/",
   "commands": "./commands/",
+  "systemPromptPath": "./SYSTEM.md",
   "sessionStart": {
     "skill": "using-tdai-memory"
   },
